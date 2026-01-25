@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && node ./node_modules/vite/bin/vite.js build",
     "preview": "vite preview",
-    "ws": "tsx server/ws.ts"
+    "ws": "node ./node_modules/tsx/dist/cli.mjs server/ws.ts"
   },
   "dependencies": {
     "@tensorflow-models/mobilenet": "^2.1.1",

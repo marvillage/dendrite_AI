@@ -1,6 +1,6 @@
 import { WebSocketServer, type WebSocket } from "ws";
 
-const port = Number(process.env.WS_PORT ?? 8080);
+const port = Number(process.env.WS_PORT ?? process.env.PORT ?? 8080);
 
 const wss = new WebSocketServer({ port });
 const clientRooms = new Map<WebSocket, string | null>();
