@@ -118,6 +118,13 @@ const createPathId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `path-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const serializePath = (path: Path, data?: Record<string, unknown>) => {
+  const serialized = (path.toObject() as unknown as Record<string, unknown>) ?? {};
+  if (data) {
+    serialized.data = data;
+  }
+  return serialized;
+};
 
 const Whiteboard = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -411,34 +418,20 @@ const Whiteboard = () => {
       resizeObserver.observe(containerRef.current);
     }
 
-    const handlePathCreated = (event: { path?: Path }) => {
-      const path = event.path;
-      if (!path) {
+    const handlePathCreated = (event: { path: FabricObject }) => {
+      const stroke = event.path as Path;
+      if (!stroke.path) {
         return;
       }
       const activeRoom = roomIdRef.current;
       const pathId = createPathId();
       const meta = { ownerId: clientId, roomId: activeRoom, pathId };
-      (path as FabricObject & { data?: typeof meta }).data = meta;
-      undoStack.current.push(path);
+      (stroke as FabricObject & { data?: typeof meta }).data = meta;
+      undoStack.current.push(stroke);
       redoStack.current = [];
       bumpHistory();
       const createdAt = Date.now();
-      const serialized = path.toObject([
-        "path",
-        "stroke",
-        "strokeWidth",
-        "strokeLineCap",
-        "strokeLineJoin",
-        "strokeMiterLimit",
-        "strokeDashArray",
-        "strokeDashOffset",
-        "strokeUniform",
-        "fill",
-        "opacity",
-        "globalCompositeOperation",
-        "data"
-      ]) as Record<string, unknown>;
+      const serialized = serializePath(stroke, meta);
       pushDrawEvent({
         createdAt,
         path: serialized,
@@ -571,14 +564,16 @@ const Whiteboard = () => {
           canvas.getObjects().forEach((object) => canvas.remove(object));
           const events: DrawEvent[] = [];
           payload.paths.forEach((draw) => {
-            const pathData = draw.path as { path?: Path["path"] } & Record<
-              string,
-              unknown
-            >;
+            const pathData = draw.path as Record<string, unknown> & {
+              path?: Path["path"];
+            };
             if (!pathData?.path) {
               return;
             }
-            const path = new Path(pathData.path, pathData);
+            const path = new Path(
+              pathData.path,
+              pathData as unknown as Record<string, unknown>
+            );
             const existingData =
               typeof pathData.data === "object" && pathData.data
                 ? pathData.data
@@ -617,15 +612,17 @@ const Whiteboard = () => {
           if (!canvas) {
             return;
           }
-          const pathData = payload.path as { path?: Path["path"] } & Record<
-            string,
-            unknown
-          >;
+          const pathData = payload.path as Record<string, unknown> & {
+            path?: Path["path"];
+          };
           if (!pathData?.path) {
             return;
           }
           isApplyingRef.current = true;
-          const path = new Path(pathData.path, pathData);
+          const path = new Path(
+            pathData.path,
+            pathData as unknown as Record<string, unknown>
+          );
           const existingData =
             typeof pathData.data === "object" && pathData.data
               ? pathData.data
@@ -829,21 +826,10 @@ const Whiteboard = () => {
     canvas.renderAll();
     undoStack.current.push(restored);
     const createdAt = Date.now();
-    const serialized = restoredPath.toObject([
-      "path",
-      "stroke",
-      "strokeWidth",
-      "strokeLineCap",
-      "strokeLineJoin",
-      "strokeMiterLimit",
-      "strokeDashArray",
-      "strokeDashOffset",
-      "strokeUniform",
-      "fill",
-      "opacity",
-      "globalCompositeOperation",
-      "data"
-    ]) as Record<string, unknown>;
+    const serialized = serializePath(
+      restoredPath,
+      (restoredPath as FabricObject & { data?: Record<string, unknown> }).data
+    );
     pushDrawEvent({
       createdAt,
       path: serialized,
@@ -1104,12 +1090,14 @@ const Whiteboard = () => {
         if (delay > 0) {
           await new Promise((resolve) => window.setTimeout(resolve, delay));
         }
-        const pathData = event.path as { path?: Path["path"] } & Record<
-          string,
-          unknown
-        >;
+        const pathData = event.path as Record<string, unknown> & {
+          path?: Path["path"];
+        };
         if (pathData?.path) {
-          const path = new Path(pathData.path, pathData);
+          const path = new Path(
+            pathData.path,
+            pathData as unknown as Record<string, unknown>
+          );
           playbackCanvas.add(path);
           playbackCanvas.renderAll();
         }
