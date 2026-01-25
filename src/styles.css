@@ -94,6 +94,19 @@ body {
   z-index: 2;
 }
 
+.room-hint {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--mist-200);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  color: var(--ink-700);
+}
+
 .cursor-marker {
   position: absolute;
   display: inline-flex;
@@ -209,6 +222,16 @@ body {
   background: var(--mist-100);
   border-radius: 12px;
   padding: 8px 10px;
+}
+
+.room-code {
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  letter-spacing: 1px;
+  font-weight: 700;
+  background: var(--mist-100);
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: inline-block;
 }
 
 .control-label {

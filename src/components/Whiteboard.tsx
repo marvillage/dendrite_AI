@@ -7,14 +7,19 @@
   type FormEvent,
   type PointerEvent
 } from "react";
-import { Canvas, FabricObject, PencilBrush } from "fabric";
+import { Canvas, FabricObject, PencilBrush, Path } from "fabric";
 import { jsPDF } from "jspdf";
 import type {
   ChatPayload,
   CursorPayload,
+  ClearPayload,
+  DrawPayload,
+  HistoryPayload,
   InvitePayload,
   PresencePayload,
-  SocketMessage
+  RoomJoinPayload,
+  SocketMessage,
+  UndoPayload
 } from "../types";
 
 const colors = [
@@ -43,6 +48,13 @@ type CollaboratorState = {
   y: number | null;
   drawing: boolean;
   lastSeen: number;
+};
+
+type DrawEvent = {
+  createdAt: number;
+  path: Record<string, unknown>;
+  pathId: string;
+  ownerId: string;
 };
 
 const readStoredValue = (key: string, fallback: string) => {
@@ -99,6 +111,13 @@ const formatTimestamp = (timestamp: number) =>
   });
 
 const clamp = (value: number) => Math.min(1, Math.max(0, value));
+const normalizeRoomId = (value: string) => value.trim().toUpperCase();
+const createRoomId = () =>
+  Math.random().toString(36).slice(2, 8).toUpperCase();
+const createPathId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `path-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const Whiteboard = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -106,14 +125,16 @@ const Whiteboard = () => {
   const fabricRef = useRef<Canvas | null>(null);
   const isApplyingRef = useRef(false);
   const sizeRef = useRef({ width: 0, height: 0 });
-  const undoStack = useRef<string[]>([]);
-  const redoStack = useRef<string[]>([]);
+  const undoStack = useRef<FabricObject[]>([]);
+  const redoStack = useRef<FabricObject[]>([]);
   const socketRef = useRef<WebSocket | null>(null);
   const cursorFrameRef = useRef<number | null>(null);
   const cursorPositionRef = useRef({ x: 0.5, y: 0.5 });
   const isDrawingRef = useRef(false);
   const chatIdsRef = useRef(new Set<string>());
   const inviteIdsRef = useRef(new Set<string>());
+  const drawEventsRef = useRef<DrawEvent[]>([]);
+  const roomIdRef = useRef<string>("");
   const sendPresenceRef = useRef<() => void>(() => {});
   const clientIdRef = useRef(
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -144,17 +165,60 @@ const Whiteboard = () => {
   const [inviteNote, setInviteNote] = useState("");
   const [inviteLog, setInviteLog] = useState<InvitePayload[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [roomId, setRoomId] = useState("");
+  const [roomDraft, setRoomDraft] = useState("");
+  const [drawEventCount, setDrawEventCount] = useState(0);
+  const [isExporting, setIsExporting] = useState(false);
 
   const clientId = clientIdRef.current;
 
+  useEffect(() => {
+    roomIdRef.current = roomId;
+  }, [roomId]);
+
   const canUndo = useMemo(
-    () => undoStack.current.length > 1,
+    () => undoStack.current.length > 0,
     [historyVersion]
   );
   const canRedo = useMemo(
     () => redoStack.current.length > 0,
     [historyVersion]
   );
+
+  const bumpHistory = useCallback(() => {
+    setHistoryVersion((version) => version + 1);
+  }, []);
+
+  const pushDrawEvent = useCallback((event: DrawEvent) => {
+    drawEventsRef.current.push(event);
+    setDrawEventCount(drawEventsRef.current.length);
+  }, []);
+
+  const removeDrawEvent = useCallback((pathId: string) => {
+    drawEventsRef.current = drawEventsRef.current.filter(
+      (event) => event.pathId !== pathId
+    );
+    setDrawEventCount(drawEventsRef.current.length);
+  }, []);
+
+  const removeDrawEventsByOwner = useCallback((ownerId: string) => {
+    drawEventsRef.current = drawEventsRef.current.filter(
+      (event) => event.ownerId !== ownerId
+    );
+    setDrawEventCount(drawEventsRef.current.length);
+  }, []);
+
+  const clearCanvas = useCallback(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) {
+      return;
+    }
+    canvas.getObjects().forEach((object) => canvas.remove(object));
+    canvas.renderAll();
+    undoStack.current = [];
+    redoStack.current = [];
+    bumpHistory();
+  }, [bumpHistory]);
 
   const updateCollaborator = useCallback((payload: Partial<CollaboratorState>) => {
     if (!payload.clientId) {
@@ -187,10 +251,15 @@ const Whiteboard = () => {
 
   useEffect(() => {
     sendPresenceRef.current = () => {
+      const activeRoom = roomIdRef.current;
+      if (!activeRoom) {
+        return;
+      }
       const payload: PresencePayload = {
         clientId,
         name: displayName.trim() || "Guest",
         color: cursorColor,
+        roomId: activeRoom,
         lastActive: Date.now()
       };
       sendSocketMessage({ type: "presence", payload });
@@ -201,12 +270,68 @@ const Whiteboard = () => {
     sendPresenceRef.current();
   }, []);
 
+  const sendJoin = useCallback(
+    (nextRoomId: string) => {
+      const payload: RoomJoinPayload = {
+        clientId,
+        name: displayName.trim() || "Guest",
+        color: cursorColor,
+        roomId: nextRoomId,
+        joinedAt: Date.now()
+      };
+      sendSocketMessage({ type: "join", payload });
+    },
+    [clientId, cursorColor, displayName, sendSocketMessage]
+  );
+
+  const joinRoom = useCallback(
+    (nextRoomId: string) => {
+      const normalized = normalizeRoomId(nextRoomId);
+      if (!normalized) {
+        return;
+      }
+      roomIdRef.current = normalized;
+      setRoomId(normalized);
+      setRoomDraft(normalized);
+      clearCanvas();
+      setCollaborators({});
+      setChatMessages([]);
+      setInviteLog([]);
+      chatIdsRef.current = new Set();
+      inviteIdsRef.current = new Set();
+      drawEventsRef.current = [];
+      setDrawEventCount(0);
+      sendJoin(normalized);
+      sendPresenceRef.current();
+    },
+    [clearCanvas, sendJoin]
+  );
+
+  const leaveRoom = useCallback(() => {
+    roomIdRef.current = "";
+    setRoomId("");
+    setRoomDraft("");
+    clearCanvas();
+    setCollaborators({});
+    setChatMessages([]);
+    setInviteLog([]);
+    chatIdsRef.current = new Set();
+    inviteIdsRef.current = new Set();
+    drawEventsRef.current = [];
+    setDrawEventCount(0);
+  }, [clearCanvas]);
+
   const sendCursor = useCallback(
     (x: number, y: number, drawing: boolean) => {
+      const activeRoom = roomIdRef.current;
+      if (!activeRoom) {
+        return;
+      }
       const payload: CursorPayload = {
         clientId,
         name: displayName.trim() || "Guest",
         color: cursorColor,
+        roomId: activeRoom,
         x,
         y,
         drawing,
@@ -261,19 +386,6 @@ const Whiteboard = () => {
     canvas.freeDrawingBrush = new PencilBrush(canvas);
     applyBrush();
 
-    const saveState = () => {
-      if (isApplyingRef.current) {
-        return;
-      }
-      const snapshot = JSON.stringify(canvas.toJSON());
-      const stack = undoStack.current;
-      if (stack[stack.length - 1] !== snapshot) {
-        stack.push(snapshot);
-      }
-      redoStack.current = [];
-      setHistoryVersion((version) => version + 1);
-    };
-
     const handleResize = () => {
       const container = containerRef.current;
       if (!container) {
@@ -299,14 +411,63 @@ const Whiteboard = () => {
       resizeObserver.observe(containerRef.current);
     }
 
-    canvas.on("path:created", saveState);
-    canvas.on("object:modified", saveState);
+    const handlePathCreated = (event: { path?: Path }) => {
+      const path = event.path;
+      if (!path) {
+        return;
+      }
+      const activeRoom = roomIdRef.current;
+      const pathId = createPathId();
+      const meta = { ownerId: clientId, roomId: activeRoom, pathId };
+      (path as FabricObject & { data?: typeof meta }).data = meta;
+      undoStack.current.push(path);
+      redoStack.current = [];
+      bumpHistory();
+      const createdAt = Date.now();
+      const serialized = path.toObject([
+        "path",
+        "stroke",
+        "strokeWidth",
+        "strokeLineCap",
+        "strokeLineJoin",
+        "strokeMiterLimit",
+        "strokeDashArray",
+        "strokeDashOffset",
+        "strokeUniform",
+        "fill",
+        "opacity",
+        "globalCompositeOperation",
+        "data"
+      ]) as Record<string, unknown>;
+      pushDrawEvent({
+        createdAt,
+        path: serialized,
+        pathId,
+        ownerId: clientId
+      });
+      if (!activeRoom) {
+        return;
+      }
+      const payload: DrawPayload = {
+        clientId,
+        roomId: activeRoom,
+        pathId,
+        path: serialized,
+        createdAt
+      };
+      sendSocketMessage({ type: "draw", payload });
+    };
 
-    saveState();
+    canvas.on("path:created", handlePathCreated);
+    canvas.on("object:modified", bumpHistory);
+
     handleResize();
+    bumpHistory();
 
     return () => {
       resizeObserver.disconnect();
+      canvas.off("path:created", handlePathCreated);
+      canvas.off("object:modified", bumpHistory);
       canvas.dispose();
     };
   }, []);
@@ -344,7 +505,10 @@ const Whiteboard = () => {
 
     const handleOpen = () => {
       setConnectionStatus("online");
-      sendPresence();
+      if (roomIdRef.current) {
+        sendJoin(roomIdRef.current);
+        sendPresence();
+      }
     };
 
     const handleClose = () => {
@@ -361,52 +525,198 @@ const Whiteboard = () => {
       if (!parsed || !parsed.type) {
         return;
       }
-      if (parsed.type === "cursor") {
-        const payload = parsed.payload as CursorPayload;
-        if (payload.clientId === clientId) {
-          return;
-        }
-        updateCollaborator({
-          clientId: payload.clientId,
-          name: payload.name,
-          color: payload.color,
-          x: payload.x,
+        if (parsed.type === "cursor") {
+          const payload = parsed.payload as CursorPayload;
+          if (payload.clientId === clientId) {
+            return;
+          }
+          if (payload.roomId !== roomIdRef.current) {
+            return;
+          }
+          updateCollaborator({
+            clientId: payload.clientId,
+            name: payload.name,
+            color: payload.color,
+            x: payload.x,
           y: payload.y,
           drawing: payload.drawing,
           lastSeen: payload.updatedAt
         });
       }
-      if (parsed.type === "presence") {
-        const payload = parsed.payload as PresencePayload;
-        if (payload.clientId === clientId) {
-          return;
+        if (parsed.type === "presence") {
+          const payload = parsed.payload as PresencePayload;
+          if (payload.clientId === clientId) {
+            return;
+          }
+          if (payload.roomId !== roomIdRef.current) {
+            return;
+          }
+          updateCollaborator({
+            clientId: payload.clientId,
+            name: payload.name,
+            color: payload.color,
+            lastSeen: payload.lastActive
+          });
         }
-        updateCollaborator({
-          clientId: payload.clientId,
-          name: payload.name,
-          color: payload.color,
-          lastSeen: payload.lastActive
-        });
-      }
-      if (parsed.type === "chat") {
-        const payload = parsed.payload as ChatPayload;
-        if (payload.clientId === clientId) {
-          return;
+        if (parsed.type === "history") {
+          const payload = parsed.payload as HistoryPayload;
+          if (payload.roomId !== roomIdRef.current) {
+            return;
+          }
+          const canvas = fabricRef.current;
+          if (!canvas) {
+            return;
+          }
+          isApplyingRef.current = true;
+          canvas.getObjects().forEach((object) => canvas.remove(object));
+          const events: DrawEvent[] = [];
+          payload.paths.forEach((draw) => {
+            const pathData = draw.path as { path?: Path["path"] } & Record<
+              string,
+              unknown
+            >;
+            if (!pathData?.path) {
+              return;
+            }
+            const path = new Path(pathData.path, pathData);
+            const existingData =
+              typeof pathData.data === "object" && pathData.data
+                ? pathData.data
+                : {};
+            (path as FabricObject & { data?: Record<string, unknown> }).data = {
+              ...existingData,
+              ownerId: draw.clientId,
+              roomId: draw.roomId,
+              pathId: draw.pathId
+            };
+            canvas.add(path);
+            events.push({
+              createdAt: draw.createdAt,
+              path: draw.path,
+              pathId: draw.pathId,
+              ownerId: draw.clientId
+            });
+          });
+          canvas.renderAll();
+          isApplyingRef.current = false;
+          drawEventsRef.current = events;
+          setDrawEventCount(events.length);
+          undoStack.current = [];
+          redoStack.current = [];
+          bumpHistory();
         }
-        if (chatIdsRef.current.has(payload.id)) {
-          return;
+        if (parsed.type === "draw") {
+          const payload = parsed.payload as DrawPayload;
+          if (payload.clientId === clientId) {
+            return;
+          }
+          if (payload.roomId !== roomIdRef.current) {
+            return;
+          }
+          const canvas = fabricRef.current;
+          if (!canvas) {
+            return;
+          }
+          const pathData = payload.path as { path?: Path["path"] } & Record<
+            string,
+            unknown
+          >;
+          if (!pathData?.path) {
+            return;
+          }
+          isApplyingRef.current = true;
+          const path = new Path(pathData.path, pathData);
+          const existingData =
+            typeof pathData.data === "object" && pathData.data
+              ? pathData.data
+              : {};
+          (path as FabricObject & { data?: Record<string, unknown> }).data = {
+            ...existingData,
+            ownerId: payload.clientId,
+            roomId: payload.roomId,
+            pathId: payload.pathId
+          };
+          canvas.add(path);
+          canvas.renderAll();
+          isApplyingRef.current = false;
+          pushDrawEvent({
+            createdAt: payload.createdAt,
+            path: payload.path,
+            pathId: payload.pathId,
+            ownerId: payload.clientId
+          });
         }
+        if (parsed.type === "undo") {
+          const payload = parsed.payload as UndoPayload;
+          if (payload.clientId === clientId) {
+            return;
+          }
+          if (payload.roomId !== roomIdRef.current) {
+            return;
+          }
+          const canvas = fabricRef.current;
+          if (!canvas) {
+            return;
+          }
+          const toRemove = canvas.getObjects().find((object) => {
+            const data = (object as FabricObject & {
+              data?: { pathId?: string };
+            }).data;
+            return data?.pathId === payload.pathId;
+          });
+          if (toRemove) {
+            canvas.remove(toRemove);
+            canvas.renderAll();
+          }
+          removeDrawEvent(payload.pathId);
+        }
+        if (parsed.type === "clear") {
+          const payload = parsed.payload as ClearPayload;
+          if (payload.clientId === clientId) {
+            return;
+          }
+          if (payload.roomId !== roomIdRef.current) {
+            return;
+          }
+          const canvas = fabricRef.current;
+          if (!canvas) {
+            return;
+          }
+          const toRemove = canvas.getObjects().filter((object) => {
+            const ownerId = (object as FabricObject & {
+              data?: { ownerId?: string };
+            }).data?.ownerId;
+            return ownerId === payload.clientId;
+          });
+          toRemove.forEach((object) => canvas.remove(object));
+          canvas.renderAll();
+          removeDrawEventsByOwner(payload.clientId);
+        }
+        if (parsed.type === "chat") {
+          const payload = parsed.payload as ChatPayload;
+          if (payload.clientId === clientId) {
+            return;
+          }
+          if (payload.roomId !== roomIdRef.current) {
+            return;
+          }
+          if (chatIdsRef.current.has(payload.id)) {
+            return;
+          }
         chatIdsRef.current.add(payload.id);
         setChatMessages((current) => [...current, payload].slice(-200));
       }
-      if (parsed.type === "invite") {
-        const payload = parsed.payload as InvitePayload;
-        if (payload.clientId === clientId) {
-          return;
-        }
-        if (inviteIdsRef.current.has(payload.id)) {
-          return;
-        }
+        if (parsed.type === "invite") {
+          const payload = parsed.payload as InvitePayload;
+          if (payload.clientId === clientId) {
+            return;
+          }
+          if (payload.roomId !== roomIdRef.current) {
+            return;
+          }
+          if (inviteIdsRef.current.has(payload.id)) {
+            return;
+          }
         inviteIdsRef.current.add(payload.id);
         setInviteLog((current) => [payload, ...current].slice(0, 8));
       }
@@ -422,7 +732,16 @@ const Whiteboard = () => {
       socket.removeEventListener("message", handleMessage);
       socket.close();
     };
-  }, [clientId, sendPresence, updateCollaborator]);
+  }, [
+    bumpHistory,
+    clientId,
+    pushDrawEvent,
+    removeDrawEvent,
+    removeDrawEventsByOwner,
+    sendJoin,
+    sendPresence,
+    updateCollaborator
+  ]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -458,42 +777,91 @@ const Whiteboard = () => {
 
   const handleUndo = () => {
     const canvas = fabricRef.current;
-    if (!canvas || undoStack.current.length < 2) {
+    const stack = undoStack.current;
+    if (!canvas || stack.length === 0) {
       return;
     }
-
-    const current = undoStack.current.pop();
-    if (current) {
-      redoStack.current.push(current);
-    }
-
-    const previous = undoStack.current[undoStack.current.length - 1];
-    if (!previous) {
+    const last = stack.pop();
+    if (!last) {
       return;
     }
-
-    isApplyingRef.current = true;
-    canvas.loadFromJSON(previous, () => {
-      canvas.renderAll();
-      isApplyingRef.current = false;
-      setHistoryVersion((version) => version + 1);
-    });
+    const pathId = (last as FabricObject & { data?: { pathId?: string } }).data
+      ?.pathId;
+    canvas.remove(last);
+    canvas.renderAll();
+    redoStack.current.push(last);
+    if (pathId) {
+      removeDrawEvent(pathId);
+      const activeRoom = roomIdRef.current;
+      if (activeRoom) {
+        const payload: UndoPayload = {
+          clientId,
+          roomId: activeRoom,
+          pathId,
+          createdAt: Date.now()
+        };
+        sendSocketMessage({ type: "undo", payload });
+      }
+    }
+    bumpHistory();
   };
 
   const handleRedo = () => {
     const canvas = fabricRef.current;
-    const snapshot = redoStack.current.pop();
-    if (!canvas || !snapshot) {
+    const stack = redoStack.current;
+    const restored = stack.pop();
+    if (!canvas || !restored) {
       return;
     }
-
-    isApplyingRef.current = true;
-    canvas.loadFromJSON(snapshot, () => {
-      canvas.renderAll();
-      isApplyingRef.current = false;
-      undoStack.current.push(snapshot);
-      setHistoryVersion((version) => version + 1);
+    const restoredPath = restored as Path;
+    const existingData =
+      (restoredPath as FabricObject & { data?: Record<string, unknown> }).data ??
+      {};
+    const pathId =
+      (existingData as { pathId?: string }).pathId ?? createPathId();
+    (restoredPath as FabricObject & { data?: Record<string, unknown> }).data = {
+      ...existingData,
+      ownerId: clientId,
+      roomId: roomIdRef.current,
+      pathId
+    };
+    canvas.add(restored);
+    canvas.renderAll();
+    undoStack.current.push(restored);
+    const createdAt = Date.now();
+    const serialized = restoredPath.toObject([
+      "path",
+      "stroke",
+      "strokeWidth",
+      "strokeLineCap",
+      "strokeLineJoin",
+      "strokeMiterLimit",
+      "strokeDashArray",
+      "strokeDashOffset",
+      "strokeUniform",
+      "fill",
+      "opacity",
+      "globalCompositeOperation",
+      "data"
+    ]) as Record<string, unknown>;
+    pushDrawEvent({
+      createdAt,
+      path: serialized,
+      pathId,
+      ownerId: clientId
     });
+    const activeRoom = roomIdRef.current;
+    if (activeRoom) {
+      const payload: DrawPayload = {
+        clientId,
+        roomId: activeRoom,
+        pathId,
+        path: serialized,
+        createdAt
+      };
+      sendSocketMessage({ type: "draw", payload });
+    }
+    bumpHistory();
   };
 
   const handleClear = () => {
@@ -501,11 +869,26 @@ const Whiteboard = () => {
     if (!canvas) {
       return;
     }
-    canvas.getObjects().forEach((object: FabricObject) => canvas.remove(object));
+    const ownObjects = canvas.getObjects().filter((object) => {
+      const ownerId = (object as FabricObject & { data?: { ownerId?: string } })
+        .data?.ownerId;
+      return ownerId === clientId;
+    });
+    ownObjects.forEach((object: FabricObject) => canvas.remove(object));
     canvas.renderAll();
-    undoStack.current.push(JSON.stringify(canvas.toJSON()));
+    undoStack.current = [];
     redoStack.current = [];
-    setHistoryVersion((version) => version + 1);
+    removeDrawEventsByOwner(clientId);
+    const activeRoom = roomIdRef.current;
+    if (activeRoom && ownObjects.length > 0) {
+      const payload: ClearPayload = {
+        clientId,
+        roomId: activeRoom,
+        createdAt: Date.now()
+      };
+      sendSocketMessage({ type: "clear", payload });
+    }
+    bumpHistory();
   };
 
   const handleSaveImage = () => {
@@ -578,14 +961,16 @@ const Whiteboard = () => {
 
   const handleChatSubmit = (event: FormEvent) => {
     event.preventDefault();
+    const activeRoom = roomIdRef.current;
     const message = chatDraft.trim();
-    if (!message) {
+    if (!message || !activeRoom) {
       return;
     }
     const payload: ChatPayload = {
       id: `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       clientId,
       name: displayName.trim() || "Guest",
+      roomId: activeRoom,
       message,
       createdAt: Date.now()
     };
@@ -597,14 +982,16 @@ const Whiteboard = () => {
 
   const handleInviteSubmit = (event: FormEvent) => {
     event.preventDefault();
+    const activeRoom = roomIdRef.current;
     const email = inviteEmail.trim();
-    if (!email) {
+    if (!email || !activeRoom) {
       return;
     }
     const payload: InvitePayload = {
       id: `invite-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       clientId,
       name: displayName.trim() || "Guest",
+      roomId: activeRoom,
       email,
       note: inviteNote.trim(),
       createdAt: Date.now()
@@ -624,7 +1011,135 @@ const Whiteboard = () => {
     setInviteEmail("");
   };
 
+  const handleCreateRoom = () => {
+    joinRoom(createRoomId());
+  };
+
+  const handleJoinRoom = (event: FormEvent) => {
+    event.preventDefault();
+    joinRoom(roomDraft);
+  };
+
+  const handleLeaveRoom = () => {
+    leaveRoom();
+  };
+
+  const handleCopyRoom = async () => {
+    if (!roomId) {
+      return;
+    }
+    if (!navigator.clipboard) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(roomId);
+    } catch {
+      // Ignore clipboard errors
+    }
+  };
+
+  const isInRoom = roomId.length > 0;
+  const canExportVideo = drawEventCount > 0 && !isExporting;
+
+  const handleExportVideo = useCallback(async () => {
+    if (!("MediaRecorder" in window)) {
+      return;
+    }
+    const canvas = fabricRef.current;
+    if (!canvas) {
+      return;
+    }
+    const events = [...drawEventsRef.current].sort(
+      (a, b) => a.createdAt - b.createdAt
+    );
+    if (events.length === 0) {
+      return;
+    }
+    setIsExporting(true);
+    let playbackCanvas: Canvas | null = null;
+    let stream: MediaStream | null = null;
+    try {
+      const width = canvas.getWidth();
+      const height = canvas.getHeight();
+      const playbackCanvasEl = document.createElement("canvas");
+      playbackCanvasEl.width = width;
+      playbackCanvasEl.height = height;
+      playbackCanvas = new Canvas(playbackCanvasEl, {
+        selection: false,
+        preserveObjectStacking: true
+      });
+      playbackCanvas.setWidth(width);
+      playbackCanvas.setHeight(height);
+      playbackCanvas.backgroundColor = "#ffffff";
+      playbackCanvas.renderAll();
+
+      stream = playbackCanvasEl.captureStream(30);
+      const mimeTypes = [
+        "video/webm;codecs=vp9",
+        "video/webm;codecs=vp8",
+        "video/webm"
+      ];
+      const mimeType = mimeTypes.find((type) =>
+        MediaRecorder.isTypeSupported(type)
+      );
+      const recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined
+      );
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      const stopped = new Promise<void>((resolve) => {
+        recorder.onstop = () => resolve();
+      });
+      recorder.start();
+
+      const startTime = events[0].createdAt;
+      let lastTime = startTime;
+      for (const event of events) {
+        const delay = Math.max(0, event.createdAt - lastTime);
+        if (delay > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, delay));
+        }
+        const pathData = event.path as { path?: Path["path"] } & Record<
+          string,
+          unknown
+        >;
+        if (pathData?.path) {
+          const path = new Path(pathData.path, pathData);
+          playbackCanvas.add(path);
+          playbackCanvas.renderAll();
+        }
+        lastTime = event.createdAt;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      recorder.stop();
+      await stopped;
+
+      const blob = new Blob(chunks, {
+        type: recorder.mimeType || "video/webm"
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `whiteboard-${roomId || "session"}.webm`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      playbackCanvas?.dispose();
+      stream?.getTracks().forEach((track) => track.stop());
+      setIsExporting(false);
+    }
+  }, [roomId]);
+
   const collaboratorList = useMemo(() => {
+    if (!isInRoom) {
+      return [];
+    }
     const others = Object.values(collaborators).filter(
       (collaborator) => collaborator.clientId !== clientId
     );
@@ -644,17 +1159,19 @@ const Whiteboard = () => {
         self: false
       }))
     ];
-  }, [collaborators, cursorColor, displayName, isDrawing, clientId]);
+  }, [collaborators, cursorColor, displayName, isDrawing, clientId, isInRoom]);
 
   const remoteCursors = useMemo(
     () =>
-      Object.values(collaborators).filter(
-        (collaborator) =>
-          collaborator.clientId !== clientId &&
-          collaborator.x !== null &&
-          collaborator.y !== null
-      ),
-    [collaborators, clientId]
+      isInRoom
+        ? Object.values(collaborators).filter(
+            (collaborator) =>
+              collaborator.clientId !== clientId &&
+              collaborator.x !== null &&
+              collaborator.y !== null
+          )
+        : [],
+    [collaborators, clientId, isInRoom]
   );
 
   return (
@@ -692,6 +1209,13 @@ const Whiteboard = () => {
             onClick={handleSavePdf}
           >
             Save PDF
+          </button>
+          <button
+            className="btn btn-outline-primary btn-sm"
+            onClick={handleExportVideo}
+            disabled={!canExportVideo}
+          >
+            {isExporting ? "Exporting..." : "Export video"}
           </button>
         </div>
       </div>
@@ -753,6 +1277,11 @@ const Whiteboard = () => {
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerLeave}
           >
+            {!isInRoom && (
+              <div className="room-hint">
+                Drawing locally. Join a room to collaborate.
+              </div>
+            )}
             <canvas ref={canvasRef} className="board-surface" />
             <div className="board-cursors">
               {remoteCursors.map((collaborator) => (
@@ -779,10 +1308,58 @@ const Whiteboard = () => {
         <div className="col-12 col-xl-4">
           <div className="collab-panel h-100">
             <div className="collab-card">
+              <div className="control-label mb-2">Room access</div>
+              {isInRoom ? (
+                <div>
+                  <div className="room-code">{roomId}</div>
+                  <div className="d-flex gap-2 mt-2">
+                    <button
+                      type="button"
+                      className="btn btn-outline-primary btn-sm"
+                      onClick={handleCopyRoom}
+                    >
+                      Copy code
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-outline-secondary btn-sm"
+                      onClick={handleLeaveRoom}
+                    >
+                      Leave
+                    </button>
+                  </div>
+                  <div className="small text-muted mt-2">
+                    Share this code to invite someone to the same board.
+                  </div>
+                </div>
+              ) : (
+                <form onSubmit={handleJoinRoom} className="d-grid gap-2">
+                  <input
+                    className="form-control"
+                    value={roomDraft}
+                    onChange={(event) => setRoomDraft(event.target.value)}
+                    placeholder="Enter room code"
+                  />
+                  <div className="d-flex gap-2">
+                    <button className="btn btn-primary btn-sm" type="submit">
+                      Join
+                    </button>
+                    <button
+                      className="btn btn-outline-secondary btn-sm"
+                      type="button"
+                      onClick={handleCreateRoom}
+                    >
+                      Create room
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+            <div className="collab-card">
               <div className="d-flex align-items-center justify-content-between mb-2">
                 <span className="control-label">Collaboration</span>
                 <span className="small text-muted">
-                  {collaboratorList.length} online
+                  {isInRoom ? `${collaboratorList.length} online` : "Join a room"}
                 </span>
               </div>
               <div className="d-flex align-items-center gap-2 mb-3">
@@ -795,7 +1372,9 @@ const Whiteboard = () => {
                 />
                 <span className="small text-muted">
                   {connectionStatus === "online"
-                    ? "Live cursor sharing"
+                    ? isInRoom
+                      ? "Live cursor sharing"
+                      : "Waiting for a room"
                     : "Offline (start the WS server)"}
                 </span>
               </div>
@@ -824,29 +1403,41 @@ const Whiteboard = () => {
                 />
               </div>
               <div className="collab-list">
-                {collaboratorList.map((collaborator) => (
-                  <div key={collaborator.clientId} className="collab-item">
-                    <span
-                      className="collab-dot"
-                      style={{ backgroundColor: collaborator.color }}
-                    />
-                    <span className="small">
-                      {collaborator.self ? `${collaborator.name} (You)` : collaborator.name}
-                    </span>
-                    {collaborator.drawing && (
-                      <span className="badge bg-light text-dark border ms-auto">
-                        Drawing
-                      </span>
-                    )}
+                {!isInRoom ? (
+                  <div className="text-muted small">
+                    Join a room to see collaborators.
                   </div>
-                ))}
+                ) : (
+                  collaboratorList.map((collaborator) => (
+                    <div key={collaborator.clientId} className="collab-item">
+                      <span
+                        className="collab-dot"
+                        style={{ backgroundColor: collaborator.color }}
+                      />
+                      <span className="small">
+                        {collaborator.self
+                          ? `${collaborator.name} (You)`
+                          : collaborator.name}
+                      </span>
+                      {collaborator.drawing && (
+                        <span className="badge bg-light text-dark border ms-auto">
+                          Drawing
+                        </span>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
             <div className="collab-card chat-card">
               <div className="control-label mb-2">Live chat</div>
               <div className="chat-log">
-                {chatMessages.length === 0 ? (
+                {!isInRoom ? (
+                  <div className="text-muted small">
+                    Join a room to start chatting.
+                  </div>
+                ) : chatMessages.length === 0 ? (
                   <div className="text-muted small">No messages yet.</div>
                 ) : (
                   chatMessages.map((message) => (
@@ -874,9 +1465,16 @@ const Whiteboard = () => {
                   className="form-control"
                   value={chatDraft}
                   onChange={(event) => setChatDraft(event.target.value)}
-                  placeholder="Message the team"
+                  placeholder={
+                    isInRoom ? "Message the team" : "Join a room to chat"
+                  }
+                  disabled={!isInRoom}
                 />
-                <button className="btn btn-outline-primary" type="submit">
+                <button
+                  className="btn btn-outline-primary"
+                  type="submit"
+                  disabled={!isInRoom}
+                >
                   Send
                 </button>
               </form>
@@ -892,6 +1490,7 @@ const Whiteboard = () => {
                   onChange={(event) => setInviteEmail(event.target.value)}
                   placeholder="name@example.com"
                   required
+                  disabled={!isInRoom}
                 />
                 <textarea
                   className="form-control"
@@ -899,13 +1498,16 @@ const Whiteboard = () => {
                   value={inviteNote}
                   onChange={(event) => setInviteNote(event.target.value)}
                   placeholder="Add a personal note"
+                  disabled={!isInRoom}
                 />
-                <button className="btn btn-primary" type="submit">
+                <button className="btn btn-primary" type="submit" disabled={!isInRoom}>
                   Send invite
                 </button>
               </form>
               <div className="invite-note small text-muted mt-2">
-                Opens your default email client with a join link.
+                {isInRoom
+                  ? "Opens your default email client with a join link."
+                  : "Join a room to enable invites."}
               </div>
               {inviteLog.length > 0 && (
                 <div className="invite-log mt-3">
