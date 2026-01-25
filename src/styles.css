@@ -1,0 +1,277 @@
+﻿@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600&display=swap");
+
+:root {
+  --ink-900: #0b1621;
+  --ink-700: #2b3a4b;
+  --ink-500: #556377;
+  --azure-600: #2e6cf6;
+  --azure-500: #3f7bff;
+  --peach-200: #ffe3d1;
+  --mist-100: #f4f7fb;
+  --mist-200: #e6ecf5;
+  --shadow-soft: 0 20px 50px rgba(15, 23, 42, 0.12);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: "Source Sans 3", "Segoe UI", sans-serif;
+  background: radial-gradient(circle at top, #f7fafc 0%, #eaf0f9 40%, #dee7f5 100%);
+  color: var(--ink-900);
+  min-height: 100vh;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-title {
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.subtitle {
+  color: var(--ink-500);
+}
+
+.card-surface {
+  background: white;
+  border: 1px solid var(--mist-200);
+  border-radius: 18px;
+  box-shadow: var(--shadow-soft);
+}
+
+.badge-soft {
+  background: rgba(63, 123, 255, 0.12);
+  color: var(--azure-600);
+  font-weight: 600;
+}
+
+.board-frame {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(243, 247, 255, 0.92));
+  border-radius: 20px;
+  border: 1px solid var(--mist-200);
+  box-shadow: var(--shadow-soft);
+  padding: 16px;
+}
+
+.board-surface {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 16px;
+  background-color: transparent;
+  z-index: 1;
+}
+
+.board-grid {
+  position: relative;
+  width: 100%;
+  height: 520px;
+  min-height: 360px;
+  border-radius: 16px;
+  overflow: hidden;
+  background-image:
+    linear-gradient(to right, rgba(15, 23, 42, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.06) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.board-cursors {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.cursor-marker {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transform: translate(-50%, -50%);
+}
+
+.cursor-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.12);
+}
+
+.cursor-label {
+  background: white;
+  border: 1px solid var(--mist-200);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--ink-700);
+  white-space: nowrap;
+}
+
+.cursor-drawing .cursor-dot {
+  box-shadow: 0 0 0 6px rgba(46, 108, 246, 0.2);
+}
+
+.collab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.collab-card {
+  background: white;
+  border: 1px solid var(--mist-200);
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08);
+}
+
+.collab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.collab-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.collab-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.chat-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-log {
+  flex: 1;
+  min-height: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.chat-message {
+  background: var(--mist-100);
+  border-radius: 12px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.chat-message.chat-self {
+  background: rgba(46, 108, 246, 0.1);
+}
+
+.chat-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--ink-500);
+  margin-bottom: 4px;
+}
+
+.chat-author {
+  font-weight: 600;
+  color: var(--ink-700);
+}
+
+.chat-text {
+  font-size: 0.85rem;
+  color: var(--ink-900);
+}
+
+.invite-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.invite-item {
+  background: var(--mist-100);
+  border-radius: 12px;
+  padding: 8px 10px;
+}
+
+.control-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink-700);
+}
+
+.prediction-pill {
+  background: var(--mist-100);
+  border-radius: 999px;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.prediction-score {
+  color: var(--azure-600);
+}
+
+.image-preview {
+  border-radius: 16px;
+  border: 1px solid var(--mist-200);
+  background: var(--mist-100);
+  max-height: 280px;
+  object-fit: cover;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 8px;
+}
+
+.status-online {
+  background: #28c76f;
+}
+
+.status-offline {
+  background: #ff9f43;
+}
+
+@media (max-width: 991px) {
+  .board-frame {
+    padding: 12px;
+  }
+
+  .board-grid {
+    height: 420px;
+  }
+
+  .chat-log {
+    max-height: 200px;
+  }
+}
+
+@media (max-width: 575px) {
+  .board-grid {
+    height: 360px;
+  }
+}
