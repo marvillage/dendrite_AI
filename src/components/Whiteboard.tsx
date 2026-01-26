@@ -138,11 +138,14 @@ const Whiteboard = () => {
   const cursorFrameRef = useRef<number | null>(null);
   const cursorPositionRef = useRef({ x: 0.5, y: 0.5 });
   const isDrawingRef = useRef(false);
+  const isErasingRef = useRef(false);
+  const brushSizeRef = useRef(6);
   const chatIdsRef = useRef(new Set<string>());
   const inviteIdsRef = useRef(new Set<string>());
   const drawEventsRef = useRef<DrawEvent[]>([]);
   const roomIdRef = useRef<string>("");
   const sendPresenceRef = useRef<() => void>(() => {});
+  const activeToolRef = useRef<"brush" | "eraser">("brush");
   const clientIdRef = useRef(
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
@@ -172,6 +175,7 @@ const Whiteboard = () => {
   const [inviteNote, setInviteNote] = useState("");
   const [inviteLog, setInviteLog] = useState<InvitePayload[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [activeTool, setActiveTool] = useState<"brush" | "eraser">("brush");
   const [roomId, setRoomId] = useState("");
   const [roomDraft, setRoomDraft] = useState("");
   const [drawEventCount, setDrawEventCount] = useState(0);
@@ -182,6 +186,15 @@ const Whiteboard = () => {
   useEffect(() => {
     roomIdRef.current = roomId;
   }, [roomId]);
+
+  useEffect(() => {
+    activeToolRef.current = activeTool;
+    applyBrush();
+  }, [activeTool]);
+
+  useEffect(() => {
+    brushSizeRef.current = brushSize;
+  }, [brushSize]);
 
   const canUndo = useMemo(
     () => undoStack.current.length > 0,
@@ -213,6 +226,11 @@ const Whiteboard = () => {
       (event) => event.ownerId !== ownerId
     );
     setDrawEventCount(drawEventsRef.current.length);
+  }, []);
+
+  const pruneHistoryForObject = useCallback((object: FabricObject) => {
+    undoStack.current = undoStack.current.filter((item) => item !== object);
+    redoStack.current = redoStack.current.filter((item) => item !== object);
   }, []);
 
   const clearCanvas = useCallback(() => {
@@ -375,6 +393,7 @@ const Whiteboard = () => {
     const brush = canvas.freeDrawingBrush as PencilBrush;
     brush.color = brushColor;
     brush.width = brushSize;
+    canvas.isDrawingMode = activeTool === "brush";
   };
 
   useEffect(() => {
@@ -451,8 +470,74 @@ const Whiteboard = () => {
       sendSocketMessage({ type: "draw", payload });
     };
 
+    const handleErase = (event: { e: MouseEvent }) => {
+      if (!isErasingRef.current) {
+        return;
+      }
+      const pointer = canvas.getPointer(event.e);
+      const radius = Math.max(2, brushSizeRef.current);
+      const targets = canvas.getObjects().filter((object) => {
+        const rect = object.getBoundingRect();
+        const withinBounds =
+          pointer.x >= rect.left - radius &&
+          pointer.x <= rect.left + rect.width + radius &&
+          pointer.y >= rect.top - radius &&
+          pointer.y <= rect.top + rect.height + radius;
+        return withinBounds && object.containsPoint(pointer);
+      });
+      if (targets.length === 0) {
+        return;
+      }
+      const activeRoom = roomIdRef.current;
+      const removed = new Set<string>();
+      targets.forEach((object) => {
+        const data = (object as FabricObject & {
+          data?: { ownerId?: string; pathId?: string };
+        }).data;
+        if (data?.ownerId !== clientId) {
+          return;
+        }
+        if (data?.pathId && removed.has(data.pathId)) {
+          return;
+        }
+        canvas.remove(object);
+        pruneHistoryForObject(object);
+        if (data?.pathId) {
+          removeDrawEvent(data.pathId);
+          removed.add(data.pathId);
+          if (activeRoom) {
+            const payload: UndoPayload = {
+              clientId,
+              roomId: activeRoom,
+              pathId: data.pathId,
+              createdAt: Date.now()
+            };
+            sendSocketMessage({ type: "undo", payload });
+          }
+        }
+      });
+      canvas.renderAll();
+      bumpHistory();
+    };
+
     canvas.on("path:created", handlePathCreated);
     canvas.on("object:modified", bumpHistory);
+    canvas.on("mouse:down", (event) => {
+      if (activeToolRef.current !== "eraser") {
+        return;
+      }
+      isErasingRef.current = true;
+      handleErase(event as { e: MouseEvent });
+    });
+    canvas.on("mouse:move", (event) => {
+      if (activeToolRef.current !== "eraser") {
+        return;
+      }
+      handleErase(event as { e: MouseEvent });
+    });
+    canvas.on("mouse:up", () => {
+      isErasingRef.current = false;
+    });
 
     handleResize();
     bumpHistory();
@@ -461,6 +546,9 @@ const Whiteboard = () => {
       resizeObserver.disconnect();
       canvas.off("path:created", handlePathCreated);
       canvas.off("object:modified", bumpHistory);
+      canvas.off("mouse:down");
+      canvas.off("mouse:move");
+      canvas.off("mouse:up");
       canvas.dispose();
     };
   }, []);
@@ -1210,6 +1298,29 @@ const Whiteboard = () => {
 
       <div className="d-flex flex-wrap gap-3 align-items-center mb-3">
         <div>
+          <div className="control-label mb-2">Tool</div>
+          <div className="btn-group" role="group" aria-label="Tool selector">
+            <button
+              type="button"
+              className={`btn btn-sm ${
+                activeTool === "brush" ? "btn-primary" : "btn-outline-primary"
+              }`}
+              onClick={() => setActiveTool("brush")}
+            >
+              Brush
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${
+                activeTool === "eraser" ? "btn-primary" : "btn-outline-primary"
+              }`}
+              onClick={() => setActiveTool("eraser")}
+            >
+              Eraser
+            </button>
+          </div>
+        </div>
+        <div>
           <div className="control-label mb-2">Brush color</div>
           <div className="d-flex gap-2 align-items-center">
             {colors.map((color) => (
@@ -1238,7 +1349,9 @@ const Whiteboard = () => {
         </div>
 
         <div>
-          <div className="control-label mb-2">Brush size</div>
+          <div className="control-label mb-2">
+            {activeTool === "eraser" ? "Eraser size" : "Brush size"}
+          </div>
           <div className="d-flex align-items-center gap-3">
             <input
               type="range"
