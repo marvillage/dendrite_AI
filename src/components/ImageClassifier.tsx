@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import * as mobilenet from "@tensorflow-models/mobilenet";
 import "@tensorflow/tfjs";
 import { LivePrediction, Prediction } from "../types";
 
 const formatPercent = (value: number) => `${Math.round(value * 100)}%`;
+const modelStatusLabels = {
+  loading: "Loading model",
+  ready: "Model Ready",
+  error: "Model error"
+} as const;
 
 type ImageClassifierProps = {
   onPrediction: (payload: Omit<LivePrediction, "id" | "createdAt">) => void;
@@ -16,7 +21,7 @@ const ImageClassifier = ({ onPrediction }: ImageClassifierProps) => {
     "loading" | "ready" | "error"
   >("loading");
   const [imageSrc, setImageSrc] = useState<string | null>(null);
-  const [imageName, setImageName] = useState<string>("");
+  const [imageName, setImageName] = useState("");
   const [imageReady, setImageReady] = useState(false);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [isPredicting, setIsPredicting] = useState(false);
@@ -55,6 +60,10 @@ const ImageClassifier = ({ onPrediction }: ImageClassifierProps) => {
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
+      setImageSrc(null);
+      setImageName("");
+      setPredictions([]);
+      setImageReady(false);
       return;
     }
     setImageSrc(URL.createObjectURL(file));
@@ -64,13 +73,17 @@ const ImageClassifier = ({ onPrediction }: ImageClassifierProps) => {
   };
 
   useEffect(() => {
-    const runPrediction = async () => {
-      if (!model || !imageReady || !imageRef.current) {
-        return;
-      }
-      setIsPredicting(true);
-      try {
-        const results = await model.classify(imageRef.current, 5);
+    if (!model || !imageReady || !imageRef.current) {
+      return;
+    }
+    let active = true;
+    setIsPredicting(true);
+    void model
+      .classify(imageRef.current, 5)
+      .then((results) => {
+        if (!active) {
+          return;
+        }
         const formatted = results.map((item) => ({
           className: item.className,
           probability: item.probability
@@ -80,20 +93,19 @@ const ImageClassifier = ({ onPrediction }: ImageClassifierProps) => {
           imageName,
           results: formatted
         });
-      } finally {
-        setIsPredicting(false);
-      }
-    };
+      })
+      .finally(() => {
+        if (active) {
+          setIsPredicting(false);
+        }
+      });
 
-    runPrediction();
+    return () => {
+      active = false;
+    };
   }, [imageReady, model, imageName, onPrediction]);
 
-  const predictionSummary = useMemo(() => {
-    if (predictions.length === 0) {
-      return "";
-    }
-    return predictions[0].className;
-  }, [predictions]);
+  const topPrediction = predictions[0];
 
   return (
     <div className="card-surface p-4">
@@ -102,11 +114,7 @@ const ImageClassifier = ({ onPrediction }: ImageClassifierProps) => {
           <h3 className="brand-title h5 mb-1">Image Classifier</h3>
         </div>
         <span className="badge bg-light text-dark border">
-          {modelStatus === "ready"
-            ? "Model Ready"
-            : modelStatus === "loading"
-            ? "Loading model"
-            : "Model error"}
+          {modelStatusLabels[modelStatus]}
         </span>
       </div>
 
@@ -145,9 +153,9 @@ const ImageClassifier = ({ onPrediction }: ImageClassifierProps) => {
         </div>
       )}
 
-      {predictionSummary && (
+      {topPrediction && (
         <div className="alert alert-success py-2" role="alert">
-          Top match: <strong>{predictionSummary}</strong>
+          Top match: <strong>{topPrediction.className}</strong>
         </div>
       )}
 
