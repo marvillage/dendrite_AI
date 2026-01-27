@@ -100,9 +100,6 @@ const ImageClassifier = ({ onPrediction }: ImageClassifierProps) => {
       <div className="d-flex align-items-center justify-content-between mb-3">
         <div>
           <h3 className="brand-title h5 mb-1">Image Classifier</h3>
-          <p className="subtitle mb-0">
-            MobileNet model running in the browser.
-          </p>
         </div>
         <span className="badge bg-light text-dark border">
           {modelStatus === "ready"

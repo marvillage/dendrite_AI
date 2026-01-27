@@ -9,7 +9,9 @@
   --peach-200: #ffe3d1;
   --mist-100: #f4f7fb;
   --mist-200: #e6ecf5;
-  --shadow-soft: 0 20px 50px rgba(15, 23, 42, 0.12);
+  --surface-border: rgba(15, 23, 42, 0.08);
+  --shadow-soft: 0 18px 42px rgba(15, 23, 42, 0.12);
+  --shadow-raise: 0 12px 24px rgba(15, 23, 42, 0.1);
 }
 
 html,
@@ -19,12 +21,18 @@ body {
 
 body {
   font-family: "Source Sans 3", "Segoe UI", sans-serif;
-  background: radial-gradient(circle at top, #f7fafc 0%, #eaf0f9 40%, #dee7f5 100%);
+  background: radial-gradient(circle at top, #f9fbff 0%, #eef2f9 45%, #e1e9f5 100%);
   color: var(--ink-900);
   min-height: 100vh;
   overflow-x: hidden;
   overflow-y: scroll;
   scrollbar-gutter: stable;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 .app-shell {
@@ -45,9 +53,10 @@ body {
 
 .card-surface {
   background: white;
-  border: 1px solid var(--mist-200);
-  border-radius: 18px;
+  border: 1px solid var(--surface-border);
+  border-radius: 20px;
   box-shadow: var(--shadow-soft);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .badge-soft {
@@ -59,9 +68,10 @@ body {
 .board-frame {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(243, 247, 255, 0.92));
   border-radius: 20px;
-  border: 1px solid var(--mist-200);
+  border: 1px solid var(--surface-border);
   box-shadow: var(--shadow-soft);
-  padding: 16px;
+  padding: 18px;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
 .board-surface {
@@ -80,7 +90,9 @@ body {
   height: 520px;
   min-height: 360px;
   border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
   overflow: hidden;
+  background-color: #ffffff;
   background-image:
     linear-gradient(to right, rgba(15, 23, 42, 0.06) 1px, transparent 1px),
     linear-gradient(to bottom, rgba(15, 23, 42, 0.06) 1px, transparent 1px);
@@ -141,14 +153,17 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  align-items: stretch;
 }
 
 .collab-card {
   background: white;
-  border: 1px solid var(--mist-200);
-  border-radius: 16px;
+  border: 1px solid var(--surface-border);
+  border-radius: 18px;
   padding: 12px;
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--shadow-raise);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  width: 100%;
 }
 
 .collab-list {
@@ -173,6 +188,19 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
+}
+
+.chat-card form {
+  align-items: stretch;
+}
+
+.chat-card .form-control,
+.chat-card .btn {
+  min-height: 38px;
+}
+
+.chat-card .btn {
+  white-space: nowrap;
 }
 
 .chat-log {
@@ -277,6 +305,14 @@ body {
 
 .status-offline {
   background: #ff9f43;
+}
+
+.btn {
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.btn:active {
+  transform: translateY(1px);
 }
 
 @media (max-width: 991px) {

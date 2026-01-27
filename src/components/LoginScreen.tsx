@@ -9,7 +9,7 @@ const LoginScreen = () => {
         <div className="col-12 col-lg-6">
           <div className="card-surface p-4 p-lg-5">
             <span className="badge badge-soft rounded-pill px-3 py-2 mb-3">
-              Whiteboard ML Studio
+              Real-Time Collaborative Whiteboard
             </span>
             <h1 className="brand-title mb-2">Welcome back</h1>
             <p className="subtitle mb-4">

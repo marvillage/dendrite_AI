@@ -22,7 +22,7 @@ const App = () => {
           <div className="d-flex flex-column flex-lg-row gap-3 align-items-start align-items-lg-center justify-content-between">
             <div>
               <span className="badge badge-soft rounded-pill px-3 py-2 mb-2">
-                Whiteboard ML Studio
+                Real-Time Collaborative Whiteboard
               </span>
               <h1 className="brand-title mb-1">Live Visual Intelligence</h1>
               <p className="subtitle mb-0">
@@ -66,7 +66,7 @@ const App = () => {
 
       <footer className="py-4">
         <div className="container text-center text-muted small">
-          Built with React, TensorFlow.js MobileNet, Fabric.js, and Bootstrap 5.
+          Built with React, TensorFlow.js, Fabric.js, and Bootstrap 5.
         </div>
       </footer>
     </div>
