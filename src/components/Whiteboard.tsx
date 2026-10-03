@@ -9,6 +9,7 @@
 } from "react";
 import { Canvas, FabricObject, PencilBrush, Path } from "fabric";
 import { jsPDF } from "jspdf";
+import { WS_CONNECT_TIMEOUT_MS, wsUrl } from "../config";
 import type {
   ChatPayload,
   CursorPayload,
@@ -30,8 +31,6 @@ const colors = [
   "#10b981",
   "#8b5cf6"
 ];
-
-const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8080";
 
 const STORAGE_KEYS = {
   brushColor: "whiteboard:brushColor",
@@ -160,9 +159,12 @@ const Whiteboard = () => {
     readStoredValue(STORAGE_KEYS.displayName, "Guest")
   );
   const [cursorColor, setCursorColor] = useState(() => pickInitialColor());
+  // With no realtime server configured the board starts (and stays) solo.
   const [connectionStatus, setConnectionStatus] = useState<
     "connecting" | "online" | "offline"
-  >("connecting");
+  >(() => (wsUrl ? "connecting" : "offline"));
+  // Bumped to retry the realtime connection (e.g. when joining a room).
+  const [connectAttempt, setConnectAttempt] = useState(0);
   const [collaborators, setCollaborators] = useState<
     Record<string, CollaboratorState>
   >({});
@@ -295,12 +297,36 @@ const Whiteboard = () => {
     [clientId, cursorColor, displayName, sendSocketMessage]
   );
 
+  // Read through a ref so renaming yourself doesn't reopen the socket.
+  const sendJoinRef = useRef(sendJoin);
+  useEffect(() => {
+    sendJoinRef.current = sendJoin;
+  }, [sendJoin]);
+
+  // One more connection attempt when the user asks for collaboration; no
+  // background retry loop, so an unreachable server can't flood the console.
+  const retryConnection = useCallback(() => {
+    if (!wsUrl) {
+      return;
+    }
+    const socket = socketRef.current;
+    if (
+      socket &&
+      (socket.readyState === WebSocket.OPEN ||
+        socket.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+    setConnectAttempt((attempt) => attempt + 1);
+  }, []);
+
   const joinRoom = useCallback(
     (nextRoomId: string) => {
       const normalized = normalizeRoomId(nextRoomId);
       if (!normalized) {
         return;
       }
+      retryConnection();
       roomIdRef.current = normalized;
       setRoomId(normalized);
       setRoomDraft(normalized);
@@ -315,7 +341,7 @@ const Whiteboard = () => {
       sendJoin(normalized);
       sendPresenceRef.current();
     },
-    [clearCanvas, sendJoin]
+    [clearCanvas, retryConnection, sendJoin]
   );
 
   const leaveRoom = useCallback(() => {
@@ -493,19 +519,40 @@ const Whiteboard = () => {
   }, [cursorColor, connectionStatus, sendPresence]);
 
   useEffect(() => {
-    const socket = new WebSocket(WS_URL);
+    if (!wsUrl) {
+      return undefined;
+    }
+
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(wsUrl);
+    } catch {
+      // Malformed URL or blocked (e.g. ws:// from an https page): stay solo.
+      setConnectionStatus("offline");
+      return undefined;
+    }
     socketRef.current = socket;
     setConnectionStatus("connecting");
 
+    // Don't sit on "connecting" (e.g. a sleeping host): show solo mode, and
+    // still upgrade to online if the socket opens later.
+    const connectTimer = window.setTimeout(() => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        setConnectionStatus("offline");
+      }
+    }, WS_CONNECT_TIMEOUT_MS);
+
     const handleOpen = () => {
+      window.clearTimeout(connectTimer);
       setConnectionStatus("online");
       if (roomIdRef.current) {
-        sendJoin(roomIdRef.current);
+        sendJoinRef.current(roomIdRef.current);
         sendPresence();
       }
     };
 
     const handleClose = () => {
+      window.clearTimeout(connectTimer);
       setConnectionStatus("offline");
     };
 
@@ -725,18 +772,22 @@ const Whiteboard = () => {
     socket.addEventListener("message", handleMessage);
 
     return () => {
+      window.clearTimeout(connectTimer);
       socket.removeEventListener("open", handleOpen);
       socket.removeEventListener("close", handleClose);
       socket.removeEventListener("message", handleMessage);
       socket.close();
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
     };
   }, [
     bumpHistory,
     clientId,
+    connectAttempt,
     pushDrawEvent,
     removeDrawEvent,
     removeDrawEventsByOwner,
-    sendJoin,
     sendPresence,
     updateCollaborator
   ]);
@@ -1268,12 +1319,20 @@ const Whiteboard = () => {
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerLeave}
           >
-            {!isInRoom && (
-              <div className="room-hint">
-                Drawing locally. Join a room to collaborate.
-              </div>
+            {connectionStatus === "offline" ? (
+              <div className="room-hint">offline · solo mode</div>
+            ) : (
+              !isInRoom && (
+                <div className="room-hint">
+                  Drawing locally. Join a room to collaborate.
+                </div>
+              )
             )}
-            <canvas ref={canvasRef} className="board-surface" />
+            {/* Fabric re-parents the canvas into its own wrapper; keep that
+                inside a node React owns so toggling the hint can't crash. */}
+            <div className="board-canvas-host">
+              <canvas ref={canvasRef} className="board-surface" />
+            </div>
             <div className="board-cursors">
               {remoteCursors.map((collaborator) => (
                 <div
@@ -1366,7 +1425,9 @@ const Whiteboard = () => {
                     ? isInRoom
                       ? "Live cursor sharing"
                       : "Waiting for a room"
-                    : "Offline (start the WS server)"}
+                    : connectionStatus === "connecting"
+                      ? "Connecting..."
+                      : "Offline · solo mode"}
                 </span>
               </div>
               <div className="mb-3">

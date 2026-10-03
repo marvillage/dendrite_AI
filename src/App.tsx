@@ -1,20 +1,61 @@
-﻿import ImageClassifier from "./components/ImageClassifier";
-import LoadingScreen from "./components/LoadingScreen";
-import LoginScreen from "./components/LoginScreen";
+import ImageClassifier from "./components/ImageClassifier";
 import Whiteboard from "./components/Whiteboard";
 import { useAuth } from "./auth/AuthProvider";
+import { keycloakConfig } from "./config";
+
+// Stable reference so auth changes don't re-run classification.
+const ignorePrediction = () => {};
+
+// Sign-in is optional: the board is always usable, Keycloak only adds identity.
+const AccountStatus = () => {
+  const { status, canSignIn, profile, login, register, logout } = useAuth();
+
+  if (status === "authenticated") {
+    return (
+      <div className="d-flex align-items-center gap-3">
+        <div className="text-end">
+          <div className="fw-semibold">
+            {profile?.firstName || profile?.username || "User"}
+          </div>
+          <div className="small text-muted">Authenticated via Keycloak</div>
+        </div>
+        <button className="btn btn-outline-dark btn-sm" onClick={logout}>
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  const note =
+    status === "checking"
+      ? "Checking session..."
+      : canSignIn
+        ? "Not signed in"
+        : keycloakConfig
+          ? "Guest mode · sign-in unavailable"
+          : "Guest mode";
+
+  return (
+    <div className="d-flex align-items-center gap-3">
+      <div className="text-end">
+        <div className="fw-semibold">Guest</div>
+        <div className="small text-muted">{note}</div>
+      </div>
+      {canSignIn && (
+        <div className="d-flex gap-2">
+          <button className="btn btn-primary btn-sm" onClick={login}>
+            Sign in
+          </button>
+          <button className="btn btn-outline-primary btn-sm" onClick={register}>
+            Create account
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const App = () => {
-  const { isAuthenticated, isLoading, profile, logout } = useAuth();
-
-  if (isLoading) {
-    return <LoadingScreen />;
-  }
-
-  if (!isAuthenticated) {
-    return <LoginScreen />;
-  }
-
   return (
     <div className="app-shell">
       <header className="py-4 border-bottom border-light">
@@ -30,17 +71,7 @@ const App = () => {
                 clean digital whiteboard.
               </p>
             </div>
-            <div className="d-flex align-items-center gap-3">
-              <div className="text-end">
-                <div className="fw-semibold">
-                  {profile?.firstName || profile?.username || "User"}
-                </div>
-                <div className="small text-muted">Authenticated via Keycloak</div>
-              </div>
-              <button className="btn btn-outline-dark btn-sm" onClick={logout}>
-                Sign out
-              </button>
-            </div>
+            <AccountStatus />
           </div>
         </div>
       </header>
@@ -50,11 +81,7 @@ const App = () => {
           <div className="row g-4">
             <div className="col-12 col-lg-5">
               <div className="d-flex flex-column gap-4">
-                <ImageClassifier
-                  onPrediction={(payload) => {
-                    void payload;
-                  }}
-                />
+                <ImageClassifier onPrediction={ignorePrediction} />
               </div>
             </div>
             <div className="col-12 col-lg-7">
